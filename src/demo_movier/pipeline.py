@@ -4,6 +4,7 @@ Commands
 --------
   movier transcribe  — extract audio + run STT → word timestamps JSON
   movier subtitles   — generate SRT from word timestamps (or video directly)
+  movier refine      — clean filler words and join mid-sentence segments
   movier burn        — hardcode subtitles into video
   movier voice       — synthesise TTS audio from SRT
   movier replace     — replace video audio track
@@ -137,6 +138,50 @@ def subtitles_cmd(source, stt, language, max_words, max_chars, pause, output):
     )
     Path(output).write_text(subtitles.to_srt(subs), encoding="utf-8")
     click.echo(f"  {len(subs)} subtitles → {output}")
+
+
+# --------------------------------------------------------------------------- #
+# refine                                                                        #
+# --------------------------------------------------------------------------- #
+
+@cli.command()
+@click.argument("srt")
+@click.option("--backend", default="rules", show_default=True,
+              type=click.Choice(["rules", "llm"]),
+              help="'rules' is offline; 'llm' uses Gemini Flash via Vertex AI "
+                   "(reuses GOOGLE_CLOUD_PROJECT + ADC, install: uv sync --extra llm).")
+@click.option("--model", default="gemini-2.0-flash", show_default=True,
+              help="Gemini model to use with --backend llm.")
+@click.option("--join-pause", default=0.8, show_default=True,
+              help="(rules) Max silence gap in seconds between segments to consider joining.")
+@click.option("-o", "--output", default=None,
+              help="Output SRT path (default: <srt>.refined.srt).")
+def refine(srt, backend, model, join_pause, output):
+    """Remove filler words and join mid-sentence subtitle segments.
+
+    Produces a cleaner SRT suited for TTS synthesis. Use the refined SRT
+    with 'movier voice' for more natural-sounding narration.
+
+    \b
+    Typical workflow:
+      movier subtitles video.mp4          # → video.srt
+      movier refine video.srt             # → video.refined.srt
+      movier voice --timed video.refined.srt --video video.mp4
+    """
+    from demo_movier import refine as ref
+    from demo_movier.subtitles import load_srt, to_srt
+
+    output = output or _stem(srt.removesuffix(".srt"), "") + ".refined.srt"
+    subs = load_srt(srt)
+    before = len(subs)
+
+    if backend == "rules":
+        refined = ref.refine_rules(subs, join_pause_threshold=join_pause)
+    else:
+        refined = ref.refine_llm(subs, model=model)
+
+    Path(output).write_text(to_srt(refined), encoding="utf-8")
+    click.echo(f"  {before} → {len(refined)} subtitles → {output}")
 
 
 # --------------------------------------------------------------------------- #
