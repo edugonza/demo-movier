@@ -1,0 +1,36 @@
+[project]
+name = "demo-movier"
+version = "0.1.0"
+description = "Video pipeline: STT subtitles + TTS voice replacement"
+requires-python = ">=3.12"
+dependencies = [
+    "click>=8.1.0",
+    "python-dotenv>=1.0.0",
+    "ffmpeg-python>=0.2.0",
+    "pydub>=0.25.1",
+    # Google Cloud: Chirp 2 (STT) + Studio voices (TTS)
+    "google-cloud-speech>=2.27.0",
+    "google-cloud-texttospeech>=2.17.0",
+    "google-auth>=2.29.0",
+]
+
+[project.optional-dependencies]
+whisper = [
+    # Local STT — no API key, runs on CPU/GPU
+    "openai-whisper>=20231117",
+    "torch>=2.0.0",
+]
+elevenlabs = [
+    # Best-in-class TTS voice quality
+    "elevenlabs>=1.0.0",
+]
+
+[project.scripts]
+movier = "demo_movier.pipeline:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/demo_movier"]
