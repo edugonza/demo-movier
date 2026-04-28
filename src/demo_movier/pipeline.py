@@ -310,90 +310,148 @@ def replace(video, audio, output, mix, original_volume):
 @click.option("--timed", is_flag=True,
               help="Synthesise TTS per-subtitle to preserve timing.")
 @click.option("--rate", default=1.0, show_default=True)
+@click.option("--refine-backend", default="llm", show_default=True,
+              type=click.Choice(["rules", "llm"]),
+              help="Subtitle refinement backend: 'rules' is offline, 'llm' uses Gemini Flash.")
+@click.option("--resume", is_flag=True,
+              help="Skip any step whose output file already exists, resuming from where a previous run stopped.")
 @click.option("--keep-intermediates", is_flag=True,
-              help="Keep .words.json, .srt, .tts.mp3 files alongside the output.")
+              help="Keep .words.json, .srt, .refined.srt, .tts.mp3 files alongside the output.")
 @click.option("-o", "--output", default=None,
               help="Final output video path (default: <video>.final.mp4).")
 def run(video, stt, tts, voice, language, max_words, font_size, color, timed,
-        rate, keep_intermediates, output):
-    """Full pipeline: transcribe → SRT → burn subtitles → TTS → replace audio."""
-    from demo_movier import stt as stt_mod, tts as tts_mod, subtitles, video as vid
+        rate, refine_backend, resume, keep_intermediates, output):
+    """Full pipeline: transcribe → SRT → refine → TTS → extract subtitles → burn → replace audio."""
+    from demo_movier import stt as stt_mod, subtitles, video as vid
+    from demo_movier import refine as ref
 
     base = _stem(video, "")
     output = output or _stem(video, ".final.mp4")
 
+    color_map = {
+        "white":  ("&H00FFFFFF", "&H00000000"),
+        "yellow": ("&H0000FFFF", "&H00000000"),
+        "cyan":   ("&H00FFFF00", "&H00000000"),
+    }
+    primary, outline = color_map[color]
+    # resume requires intermediates on disk so steps can be detected as complete
+    save_intermediates = keep_intermediates or resume
+
     with tempfile.TemporaryDirectory() as tmp:
-        wav       = os.path.join(tmp, "audio.wav")
-        srt_path  = f"{base}.srt"
-        words_json = f"{base}.words.json"
-        tts_audio = f"{base}.tts.mp3"
-        subbed    = os.path.join(tmp, "subtitled.mp4")
+        wav          = os.path.join(tmp, "audio.wav")
+        srt_path     = f"{base}.srt"
+        refined_srt  = f"{base}.refined.srt"
+        words_json   = f"{base}.words.json"
+        tts_audio    = f"{base}.tts.mp3"
+        tts_wav      = os.path.join(tmp, "tts.wav")
+        tts_srt      = f"{base}.tts.srt"
+        subbed       = os.path.join(tmp, "subtitled.mp4")
 
-        # 1. Extract audio
-        click.echo("[1/5] Extracting audio …")
-        vid.extract_audio(video, wav)
+        total = 4 if tts == "none" else 7
 
-        # 2. Transcribe
-        click.echo(f"[2/5] Transcribing with {stt.upper()} …")
-        if stt == "google":
-            words = stt_mod.transcribe_google(wav, language=language)
+        # 1+2. Extract audio + Transcribe (coupled: both skipped when words JSON exists)
+        if resume and Path(words_json).exists():
+            click.echo(f"[1/{total}] Skipping audio extraction (words JSON exists) …")
+            click.echo(f"[2/{total}] Skipping transcription — loading {words_json} …")
+            raw = json.loads(Path(words_json).read_text())
+            from demo_movier.subtitles import Word
+            words = [Word(text=w["word"], start=w["start"], end=w["end"]) for w in raw]
         else:
-            words = stt_mod.transcribe_whisper(wav)
-
-        if keep_intermediates:
-            data = [{"word": w.text, "start": w.start, "end": w.end} for w in words]
-            Path(words_json).write_text(json.dumps(data, indent=2, ensure_ascii=False))
-            click.echo(f"      saved {words_json}")
+            click.echo(f"[1/{total}] Extracting audio …")
+            vid.extract_audio(video, wav)
+            click.echo(f"[2/{total}] Transcribing with {stt.upper()} …")
+            if stt == "google":
+                words = stt_mod.transcribe_google(wav, language=language)
+            else:
+                words = stt_mod.transcribe_whisper(wav)
+            if save_intermediates:
+                data = [{"word": w.text, "start": w.start, "end": w.end} for w in words]
+                Path(words_json).write_text(json.dumps(data, indent=2, ensure_ascii=False))
+                if keep_intermediates:
+                    click.echo(f"      saved {words_json}")
 
         # 3. Generate SRT
-        click.echo("[3/5] Generating subtitles …")
-        subs = subtitles.group_into_subtitles(words, max_words=max_words)
-        Path(srt_path).write_text(subtitles.to_srt(subs), encoding="utf-8")
-        if keep_intermediates:
-            click.echo(f"      saved {srt_path}")
+        if resume and Path(srt_path).exists():
+            click.echo(f"[3/{total}] Skipping subtitle generation — loading {srt_path} …")
+            subs = subtitles.load_srt(srt_path)
+        else:
+            click.echo(f"[3/{total}] Generating subtitles …")
+            subs = subtitles.group_into_subtitles(words, max_words=max_words)
+            Path(srt_path).write_text(subtitles.to_srt(subs), encoding="utf-8")
+            if keep_intermediates:
+                click.echo(f"      saved {srt_path}")
 
-        # 4. Burn subtitles
-        click.echo("[4/5] Burning subtitles …")
-        color_map = {
-            "white":  ("&H00FFFFFF", "&H00000000"),
-            "yellow": ("&H0000FFFF", "&H00000000"),
-            "cyan":   ("&H00FFFF00", "&H00000000"),
-        }
-        primary, outline = color_map[color]
+        # 4. Refine SRT
+        if resume and Path(refined_srt).exists():
+            click.echo(f"[4/{total}] Skipping refinement — loading {refined_srt} …")
+            refined_subs = subtitles.load_srt(refined_srt)
+        else:
+            click.echo(f"[4/{total}] Refining subtitles ({refine_backend}) …")
+            if refine_backend == "rules":
+                refined_subs = ref.refine_rules(subs)
+            else:
+                refined_subs = ref.refine_llm(subs)
+            Path(refined_srt).write_text(subtitles.to_srt(refined_subs), encoding="utf-8")
+            if keep_intermediates:
+                click.echo(f"      saved {refined_srt}")
 
         if tts == "none":
-            vid.burn_subtitles(video, srt_path, output,
-                               font_size=font_size,
-                               primary_color=primary, outline_color=outline)
+            if resume and Path(output).exists():
+                click.echo(f"  Skipping subtitle burn — {output} already exists …")
+            else:
+                click.echo(f"  Burning subtitles …")
+                vid.burn_subtitles(video, refined_srt, output,
+                                   font_size=font_size,
+                                   primary_color=primary, outline_color=outline)
             click.echo(f"\nDone → {output}")
             return
 
-        vid.burn_subtitles(video, srt_path, subbed,
-                           font_size=font_size,
-                           primary_color=primary, outline_color=outline)
-
-        # 5. TTS
-        click.echo(f"[5/5] Synthesising voice ({tts.upper()}) …")
-        duration = vid.video_duration(video)
-        if timed:
-            _resolve_tts_timed(tts)(subs, duration, tts_audio,
-                                    voice_name=voice if tts == "google" else voice)
+        # 5. TTS (from refined subtitles)
+        if resume and Path(tts_audio).exists():
+            click.echo(f"[5/{total}] Skipping TTS — {tts_audio} already exists …")
         else:
-            full_text = " ".join(s.text for s in subs)
-            fn = _resolve_tts_full(tts)
-            if tts == "google":
-                fn(full_text, tts_audio, voice_name=voice, speaking_rate=rate)
+            click.echo(f"[5/{total}] Synthesising voice ({tts.upper()}) …")
+            duration = vid.video_duration(video)
+            if timed:
+                _resolve_tts_timed(tts)(refined_subs, duration, tts_audio,
+                                        voice_name=voice if tts == "google" else voice)
             else:
-                fn(full_text, tts_audio, voice_id=voice)
+                full_text = " ".join(s.text for s in refined_subs)
+                fn = _resolve_tts_full(tts)
+                if tts == "google":
+                    fn(full_text, tts_audio, voice_name=voice, speaking_rate=rate)
+                else:
+                    fn(full_text, tts_audio, voice_id=voice)
+            if keep_intermediates:
+                click.echo(f"      saved {tts_audio}")
 
-        if keep_intermediates:
-            click.echo(f"      saved {tts_audio}")
+        # 6. Extract subtitles from TTS audio (re-transcribe to get accurate timings)
+        if resume and Path(tts_srt).exists():
+            click.echo(f"[6/{total}] Skipping TTS transcription — {tts_srt} already exists …")
+        else:
+            click.echo(f"[6/{total}] Extracting subtitles from TTS audio …")
+            vid.extract_audio(tts_audio, tts_wav)
+            if stt == "google":
+                tts_words = stt_mod.transcribe_google(tts_wav, language=language)
+            else:
+                tts_words = stt_mod.transcribe_whisper(tts_wav)
+            tts_subs = subtitles.group_into_subtitles(tts_words, max_words=max_words)
+            Path(tts_srt).write_text(subtitles.to_srt(tts_subs), encoding="utf-8")
+            if keep_intermediates:
+                click.echo(f"      saved {tts_srt}")
 
-        # 6. Replace audio
-        vid.replace_audio(subbed, tts_audio, output)
+        # 7. Burn subtitles (from TTS transcription) then replace audio
+        if resume and Path(output).exists():
+            click.echo(f"[7/{total}] Skipping — {output} already exists …")
+        else:
+            click.echo(f"[7/{total}] Burning subtitles …")
+            vid.burn_subtitles(video, tts_srt, subbed,
+                               font_size=font_size,
+                               primary_color=primary, outline_color=outline)
+            vid.replace_audio(subbed, tts_audio, output)
 
-    if not keep_intermediates:
-        for f in [srt_path, words_json, tts_audio]:
+    if not save_intermediates:
+        for f in [srt_path, refined_srt, words_json, tts_audio, tts_srt]:
             Path(f).unlink(missing_ok=True)
 
     click.echo(f"\nDone → {output}")

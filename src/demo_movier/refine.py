@@ -112,7 +112,7 @@ Omit entries whose text becomes empty after cleaning."""
 
 def refine_llm(
     subs: list[Subtitle],
-    model: str = "gemini-2.0-flash",
+    model: str = "gemini-2.5-flash",
 ) -> list[Subtitle]:
     """Clean and join subtitles using Gemini Flash (Vertex AI).
 
