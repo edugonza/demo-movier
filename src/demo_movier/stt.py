@@ -41,7 +41,7 @@ def transcribe_google(
 
     project_id = project_id or os.environ["GOOGLE_CLOUD_PROJECT"]
     client = speech_v2.SpeechClient(
-        client_options={"api_endpoint": f"{location}-speech.googleapis.com"}
+        client_options={"api_endpoint": f"{location}-speech.googleapis.com", "quota_project_id": project_id}
     )
 
     config = cloud_speech.RecognitionConfig(
@@ -125,7 +125,7 @@ def transcribe_google_gcs(
 
     project_id = project_id or os.environ["GOOGLE_CLOUD_PROJECT"]
     client = speech_v2.SpeechClient(
-        client_options={"api_endpoint": f"{location}-speech.googleapis.com"}
+        client_options={"api_endpoint": f"{location}-speech.googleapis.com", "quota_project_id": project_id}
     )
 
     config = cloud_speech.RecognitionConfig(

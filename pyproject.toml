@@ -8,9 +8,10 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "ffmpeg-python>=0.2.0",
     "pydub>=0.25.1",
-    # Google Cloud: Chirp 2 (STT) + Studio voices (TTS)
+    # Google Cloud: Chirp 2 (STT) + Studio voices (TTS) + Long Audio API staging
     "google-cloud-speech>=2.27.0",
     "google-cloud-texttospeech>=2.17.0",
+    "google-cloud-storage>=2.0.0",
     "google-auth>=2.29.0",
 ]
 

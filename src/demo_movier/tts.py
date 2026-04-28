@@ -49,6 +49,9 @@ GOOGLE_VOICES = {
 }
 
 
+_MAX_BYTES = 4500  # conservative — Google's hard limit is 5000 bytes
+
+
 def synthesize_google(
     text: str,
     output_path: str,
@@ -56,18 +59,35 @@ def synthesize_google(
     speaking_rate: float = 1.0,
     pitch: float = 0.0,
 ) -> None:
-    """Synthesise full text to a single MP3 file."""
+    """Synthesise full text to a single MP3 file.
+
+    Uses the standard synchronous API for short text. Automatically falls back
+    to the Long Audio API (staging through GCS) when the input exceeds Google's
+    5000-byte limit. Set GOOGLE_CLOUD_BUCKET in .env for the long-audio path.
+    """
+    if len(text.encode()) <= _MAX_BYTES:
+        _synthesize_google_short(text, output_path, voice_name, speaking_rate, pitch)
+    else:
+        _synthesize_google_long(text, output_path, voice_name, speaking_rate, pitch)
+
+
+def _synthesize_google_short(
+    text: str,
+    output_path: str,
+    voice_name: str,
+    speaking_rate: float,
+    pitch: float,
+) -> None:
     from google.cloud import texttospeech
 
-    client = texttospeech.TextToSpeechClient()
-    lang = "-".join(voice_name.split("-")[:2])  # e.g. "en-US"
-
+    project_id = os.environ["GOOGLE_CLOUD_PROJECT"]
+    client = texttospeech.TextToSpeechClient(
+        client_options={"quota_project_id": project_id}
+    )
+    lang = "-".join(voice_name.split("-")[:2])
     response = client.synthesize_speech(
         input=texttospeech.SynthesisInput(text=text),
-        voice=texttospeech.VoiceSelectionParams(
-            language_code=lang,
-            name=voice_name,
-        ),
+        voice=texttospeech.VoiceSelectionParams(language_code=lang, name=voice_name),
         audio_config=texttospeech.AudioConfig(
             audio_encoding=texttospeech.AudioEncoding.MP3,
             speaking_rate=speaking_rate,
@@ -77,7 +97,62 @@ def synthesize_google(
     Path(output_path).write_bytes(response.audio_content)
 
 
-_SSML_MAX_BYTES = 4500  # conservative — Google hard-limits at 5000
+def _synthesize_google_long(
+    text: str,
+    output_path: str,
+    voice_name: str,
+    speaking_rate: float,
+    pitch: float,
+) -> None:
+    """Long Audio API path: writes to GCS then downloads the result."""
+    import uuid
+    from google.cloud import texttospeech as tts_long
+    from google.cloud import storage
+
+    project_id = os.environ["GOOGLE_CLOUD_PROJECT"]
+    bucket_name = os.environ.get("GOOGLE_CLOUD_BUCKET")
+    if not bucket_name:
+        raise RuntimeError(
+            "GOOGLE_CLOUD_BUCKET is required when TTS input exceeds 5000 bytes. "
+            "Set it in .env to the name of a GCS bucket the service account can write to."
+        )
+
+    # Long Audio API only supports LINEAR16; we download the WAV and convert to MP3.
+    gcs_key = f"tts-tmp/{uuid.uuid4()}.wav"
+    gcs_uri = f"gs://{bucket_name}/{gcs_key}"
+    lang = "-".join(voice_name.split("-")[:2])
+
+    client = tts_long.TextToSpeechLongAudioSynthesizeClient(
+        client_options={"quota_project_id": project_id}
+    )
+    request = tts_long.SynthesizeLongAudioRequest(
+        parent=f"projects/{project_id}/locations/us-central1",
+        input=tts_long.SynthesisInput(text=text),
+        voice=tts_long.VoiceSelectionParams(language_code=lang, name=voice_name),
+        audio_config=tts_long.AudioConfig(
+            audio_encoding=tts_long.AudioEncoding.LINEAR16,
+            speaking_rate=speaking_rate,
+            pitch=pitch,
+        ),
+        output_gcs_uri=gcs_uri,
+    )
+
+    print(f"  Long Audio API → {gcs_uri} …")
+    operation = client.synthesize_long_audio(request=request)
+    operation.result(timeout=600)
+
+    from pydub import AudioSegment  # type: ignore
+    import tempfile
+
+    blob = storage.Client(project=project_id).bucket(bucket_name).blob(gcs_key)
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        blob.download_to_filename(tmp.name)
+        blob.delete()
+        AudioSegment.from_wav(tmp.name).export(output_path, format="mp3")
+    Path(tmp.name).unlink(missing_ok=True)
+
+
+_SSML_MAX_BYTES = _MAX_BYTES
 
 
 def synthesize_google_timed(
@@ -106,7 +181,10 @@ def synthesize_google_timed(
     from google.cloud import texttospeech
     from pydub import AudioSegment  # type: ignore
 
-    client = texttospeech.TextToSpeechClient()
+    project_id = os.environ["GOOGLE_CLOUD_PROJECT"]
+    client = texttospeech.TextToSpeechClient(
+        client_options={"quota_project_id": project_id}
+    )
     lang = "-".join(voice_name.split("-")[:2])
     voice_params = texttospeech.VoiceSelectionParams(language_code=lang, name=voice_name)
     audio_cfg = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
