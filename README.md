@@ -18,11 +18,9 @@ flowchart TD
     E -->|tts=none| Z([output.mp4\nsubtitles only])
 
     E --> F[5. Synthesise voice\nTTS from refined SRT]
-    F --> G[6. Re-transcribe TTS audio\nSTT → new word timestamps]
-    G --> H[7. Generate final SRT\ntimings match TTS voice]
-    H --> I[8. Burn subtitles\nhardcode into video]
-    I --> J[9. Replace audio]
-    J --> K([final.mp4])
+    F --> G[6. Re-transcribe TTS audio\nSTT → final SRT with TTS timings]
+    G --> H[7. Burn subtitles + replace audio]
+    H --> K([final.mp4])
 ```
 
 > **Why re-transcribe?** The TTS engine speaks at a different pace than the original recording, so the subtitle timestamps from step 3 would be misaligned. Running STT on the synthesised audio produces a new SRT whose timings are perfectly in sync with the new voice.
@@ -44,7 +42,7 @@ gcloud services enable speech.googleapis.com texttospeech.googleapis.com \
 ```bash
 uv sync
 cp .env.example .env
-# fill in GOOGLE_CLOUD_PROJECT in .env
+# fill in GOOGLE_CLOUD_PROJECT (and GOOGLE_CLOUD_BUCKET for long videos) in .env
 ```
 
 Authenticate with Google Cloud:
@@ -185,6 +183,10 @@ uv run movier transcribe demo.mp4 --gcs-uri gs://your-bucket/audio.wav
 | `google` *(default)* | Very good | ~$0.016/1k chars | Studio & Chirp3 HD voices |
 | `elevenlabs` | Best | ~$0.18/1k chars | Install with `uv sync --extra elevenlabs` |
 
+#### Google TTS — Long Audio API
+
+Google's synchronous TTS API has a **5000-byte input limit**. For longer transcripts the pipeline automatically falls back to the [Long Audio API](https://cloud.google.com/text-to-speech/docs/create-audio-text-long-audio-synthesis), which writes the result to GCS and downloads it. This requires `GOOGLE_CLOUD_BUCKET` to be set in `.env`.
+
 ### Recommended Google voices
 
 | Name | Voice ID | Style |
@@ -218,5 +220,6 @@ uv run movier transcribe demo.mp4 --gcs-uri gs://your-bucket/audio.wav
 | Variable | Required | Description |
 |---|---|---|
 | `GOOGLE_CLOUD_PROJECT` | Yes (Google STT/TTS/LLM refine) | GCP project ID |
+| `GOOGLE_CLOUD_BUCKET` | Yes (Google TTS on long videos) | GCS bucket name used to stage Long Audio API output |
 | `GOOGLE_APPLICATION_CREDENTIALS` | No | Path to service account JSON; not needed if using `gcloud auth application-default login` |
 | `ELEVENLABS_API_KEY` | Only for ElevenLabs | API key from elevenlabs.io |
