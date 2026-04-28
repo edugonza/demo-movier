@@ -5,9 +5,6 @@ Supported:
                Studio voices (en-US-Studio-Q/O) are the highest quality.
                Chirp3 HD voices (e.g. en-US-Chirp3-HD-Aoede) are the newest
                and sound the most natural.
-  elevenlabs — ElevenLabs API (best overall voice quality for demos).
-               Requires: ELEVENLABS_API_KEY env var.
-               Install extras: uv sync --extra elevenlabs
 
 Two synthesis modes:
   full    — Synthesise the entire transcript as one audio file.
@@ -316,73 +313,3 @@ def _timed_ssml(
     parts.append("</speak>")
     return "".join(parts)
 
-
-# ---------------------------------------------------------------------------
-# ElevenLabs
-# ---------------------------------------------------------------------------
-
-ELEVENLABS_VOICES = {
-    # A few popular presets — list all with: elevenlabs.voices()
-    "rachel":  "21m00Tcm4TlvDq8ikWAM",
-    "adam":    "pNInz6obpgDQGcFmaJgB",
-    "bella":   "EXAVITQu4vr4xnSDxMaL",
-    "josh":    "TxGEqnHWrfWFTfGW9XjX",
-}
-
-
-def synthesize_elevenlabs(
-    text: str,
-    output_path: str,
-    voice_id: str = "21m00Tcm4TlvDq8ikWAM",  # Rachel
-    model_id: str = "eleven_multilingual_v2",
-    stability: float = 0.5,
-    similarity_boost: float = 0.75,
-) -> None:
-    """Synthesise text with ElevenLabs and save as MP3."""
-    from elevenlabs import ElevenLabs, VoiceSettings  # type: ignore
-
-    api_key = os.environ.get("ELEVENLABS_API_KEY")
-    client = ElevenLabs(api_key=api_key)
-
-    audio = client.text_to_speech.convert(
-        text=text,
-        voice_id=voice_id,
-        model_id=model_id,
-        voice_settings=VoiceSettings(
-            stability=stability,
-            similarity_boost=similarity_boost,
-        ),
-        output_format="mp3_44100_128",
-    )
-    with open(output_path, "wb") as f:
-        for chunk in audio:
-            f.write(chunk)
-
-
-def synthesize_elevenlabs_timed(
-    subtitles: list[Subtitle],
-    total_duration: float,
-    output_path: str,
-    voice_id: str = "21m00Tcm4TlvDq8ikWAM",
-    model_id: str = "eleven_multilingual_v2",
-) -> None:
-    """ElevenLabs timed synthesis — same overlay strategy as Google timed."""
-    from elevenlabs import ElevenLabs, VoiceSettings  # type: ignore
-    from pydub import AudioSegment  # type: ignore
-
-    api_key = os.environ.get("ELEVENLABS_API_KEY")
-    client = ElevenLabs(api_key=api_key)
-    base = AudioSegment.silent(duration=int(total_duration * 1000))
-
-    for sub in subtitles:
-        audio_bytes = b"".join(client.text_to_speech.convert(
-            text=sub.text,
-            voice_id=voice_id,
-            model_id=model_id,
-            voice_settings=VoiceSettings(stability=0.5, similarity_boost=0.75),
-            output_format="mp3_44100_128",
-        ))
-        clip = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
-        base = base.overlay(clip, position=int(sub.start * 1000))
-
-    base.export(output_path, format="mp3")

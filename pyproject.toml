@@ -21,10 +21,6 @@ whisper = [
     "openai-whisper>=20231117",
     "torch>=2.0.0",
 ]
-elevenlabs = [
-    # Best-in-class TTS voice quality
-    "elevenlabs>=1.0.0",
-]
 llm = [
     # Gemini Flash subtitle refinement — uses existing GOOGLE_CLOUD_PROJECT + ADC
     "google-genai>=1.0.0",

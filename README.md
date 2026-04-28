@@ -40,7 +40,7 @@ gcloud services enable speech.googleapis.com texttospeech.googleapis.com \
 ## Setup
 
 ```bash
-uv sync
+uv sync --all-extras # or choose only the extras that you need
 cp .env.example .env
 # fill in GOOGLE_CLOUD_PROJECT (and GOOGLE_CLOUD_BUCKET for long videos) in .env
 ```
@@ -91,6 +91,24 @@ Each step checks whether its output file already exists and skips it if so. The 
 | 7 — burn + replace audio | `demo.final.mp4` |
 
 `--resume` implicitly keeps all intermediate files on disk (so checkpoints survive across runs). The files are **not** deleted after a successful run — remove them manually when you no longer need them, or run without `--resume` for a clean single-shot execution.
+
+#### All options
+
+| Option | Default | Values | Description |
+|---|---|---|---|
+| `--stt` | `google` | `google`, `whisper` | Speech-to-text backend |
+| `--tts` | `google` | `google`, `none` | TTS backend; `none` skips voice replacement and only burns subtitles |
+| `--voice` | `en-US-Studio-Q` | any Google voice ID | See [Recommended Google voices](#recommended-google-voices) |
+| `--language` | `en-US` | BCP-47 tag | Language for STT transcription |
+| `--max-words` | `8` | integer | Max words per subtitle block |
+| `--font-size` | `22` | integer | Subtitle font size in pixels |
+| `--color` | `white` | `white`, `yellow`, `cyan` | Subtitle text colour |
+| `--timed` | off | flag | Synthesise TTS per subtitle to preserve original timing |
+| `--rate` | `1.0` | 0.5–2.0 | Speaking rate for TTS |
+| `--refine-backend` | `llm` | `rules`, `llm` | Subtitle refinement: `rules` is offline, `llm` uses Gemini Flash |
+| `--resume` | off | flag | Skip steps whose output files already exist |
+| `--keep-intermediates` | off | flag | Keep `.words.json`, `.srt`, `.refined.srt`, `.tts.mp3`, `.tts.srt` after the run |
+| `-o` / `--output` | `<video>.final.mp4` | path | Final output video path |
 
 ### Step by step
 
@@ -169,21 +187,18 @@ uv run movier replace demo.subtitled.mp4 demo.refined.tts.mp3 --mix --original-v
 
 Switch with `--stt whisper` on any command that triggers transcription.
 
-For videos longer than ~10 minutes, upload the audio to GCS first and use the `--gcs-uri` flag:
+The Google backend automatically splits audio into 55-second chunks, so there is no length limit — long videos work out of the box. The `--gcs-uri` flag is an optional shortcut if you have already uploaded the audio to GCS and want to skip local extraction:
 
 ```bash
 gsutil cp audio.wav gs://your-bucket/audio.wav
 uv run movier transcribe demo.mp4 --gcs-uri gs://your-bucket/audio.wav
 ```
 
-## TTS backends
+## TTS backend
 
-| Backend | Voice quality | Cost | Notes |
-|---|---|---|---|
-| `google` *(default)* | Very good | ~$0.016/1k chars | Studio & Chirp3 HD voices |
-| `elevenlabs` | Best | ~$0.18/1k chars | Install with `uv sync --extra elevenlabs` |
+The pipeline uses Google Cloud TTS.
 
-#### Google TTS — Long Audio API
+#### Long Audio API
 
 Google's synchronous TTS API has a **5000-byte input limit**. For longer transcripts the pipeline automatically falls back to the [Long Audio API](https://cloud.google.com/text-to-speech/docs/create-audio-text-long-audio-synthesis), which writes the result to GCS and downloads it. This requires `GOOGLE_CLOUD_BUCKET` to be set in `.env`.
 
@@ -222,4 +237,3 @@ Google's synchronous TTS API has a **5000-byte input limit**. For longer transcr
 | `GOOGLE_CLOUD_PROJECT` | Yes (Google STT/TTS/LLM refine) | GCP project ID |
 | `GOOGLE_CLOUD_BUCKET` | Yes (Google TTS on long videos) | GCS bucket name used to stage Long Audio API output |
 | `GOOGLE_APPLICATION_CREDENTIALS` | No | Path to service account JSON; not needed if using `gcloud auth application-default login` |
-| `ELEVENLABS_API_KEY` | Only for ElevenLabs | API key from elevenlabs.io |

@@ -39,15 +39,12 @@ def _resolve_stt(backend: str):
 
 def _resolve_tts_full(backend: str):
     from demo_movier import tts
-    return {"google": tts.synthesize_google, "elevenlabs": tts.synthesize_elevenlabs}[backend]
+    return {"google": tts.synthesize_google}[backend]
 
 
 def _resolve_tts_timed(backend: str):
     from demo_movier import tts
-    return {
-        "google": tts.synthesize_google_timed,
-        "elevenlabs": tts.synthesize_elevenlabs_timed,
-    }[backend]
+    return {"google": tts.synthesize_google_timed}[backend]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -228,11 +225,10 @@ def burn(video, srt, output, font, font_size, color, no_bold, margin_v):
 
 @cli.command()
 @click.argument("srt_or_text")
-@click.option("--tts", default="google", type=click.Choice(["google", "elevenlabs"]),
+@click.option("--tts", default="google", type=click.Choice(["google"]),
               show_default=True)
 @click.option("--voice", default="en-US-Studio-Q", show_default=True,
-              help="Voice name/ID. Google: see tts.GOOGLE_VOICES. "
-                   "ElevenLabs: voice ID or use tts.ELEVENLABS_VOICES presets.")
+              help="Voice name. See tts.GOOGLE_VOICES for available options.")
 @click.option("--timed", is_flag=True,
               help="Preserve subtitle timestamps (overlay each clip at its start time). "
                    "Requires --video to determine total duration.")
@@ -257,14 +253,11 @@ def voice(srt_or_text, tts, voice, timed, video, rate, output):
             raise click.UsageError("--video is required with --timed")
         duration = vid.video_duration(video)
         click.echo(f"  TTS (timed, {tts.upper()}, {len(subs)} segments) …")
-        _resolve_tts_timed(tts)(subs, duration, output, voice_name=voice if tts == "google" else voice)
+        _resolve_tts_timed(tts)(subs, duration, output, voice_name=voice)
     else:
         click.echo(f"  TTS (full, {tts.upper()}) …")
         fn = _resolve_tts_full(tts)
-        if tts == "google":
-            fn(full_text, output, voice_name=voice, speaking_rate=rate)
-        else:
-            fn(full_text, output, voice_id=voice)
+        fn(full_text, output, voice_name=voice, speaking_rate=rate)
 
     click.echo(f"  → {output}")
 
@@ -299,7 +292,7 @@ def replace(video, audio, output, mix, original_volume):
 @click.argument("video")
 @click.option("--stt", default="google", type=click.Choice(["google", "whisper"]),
               show_default=True)
-@click.option("--tts", default="google", type=click.Choice(["google", "elevenlabs"]),
+@click.option("--tts", default="google", type=click.Choice(["google", "none"]),
               show_default=True, help="Pass 'none' to skip voice replacement.")
 @click.option("--voice", default="en-US-Studio-Q", show_default=True)
 @click.option("--language", default="en-US", show_default=True)
@@ -413,15 +406,11 @@ def run(video, stt, tts, voice, language, max_words, font_size, color, timed,
             click.echo(f"[5/{total}] Synthesising voice ({tts.upper()}) …")
             duration = vid.video_duration(video)
             if timed:
-                _resolve_tts_timed(tts)(refined_subs, duration, tts_audio,
-                                        voice_name=voice if tts == "google" else voice)
+                _resolve_tts_timed(tts)(refined_subs, duration, tts_audio, voice_name=voice)
             else:
                 full_text = " ".join(s.text for s in refined_subs)
                 fn = _resolve_tts_full(tts)
-                if tts == "google":
-                    fn(full_text, tts_audio, voice_name=voice, speaking_rate=rate)
-                else:
-                    fn(full_text, tts_audio, voice_id=voice)
+                fn(full_text, tts_audio, voice_name=voice, speaking_rate=rate)
             if keep_intermediates:
                 click.echo(f"      saved {tts_audio}")
 
