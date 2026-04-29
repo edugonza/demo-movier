@@ -310,10 +310,12 @@ def replace(video, audio, output, mix, original_volume):
               help="Skip any step whose output file already exists, resuming from where a previous run stopped.")
 @click.option("--keep-intermediates", is_flag=True,
               help="Keep .words.json, .srt, .refined.srt, .tts.mp3 files alongside the output.")
+@click.option("--no-burn-subtitles", is_flag=True,
+              help="Skip burning subtitles into the final video. With --tts=none, only SRT files are produced.")
 @click.option("-o", "--output", default=None,
               help="Final output video path (default: <video>.final.mp4).")
 def run(video, stt, tts, voice, language, max_words, font_size, color, timed,
-        rate, refine_backend, resume, keep_intermediates, output):
+        rate, refine_backend, resume, keep_intermediates, no_burn_subtitles, output):
     """Full pipeline: transcribe → SRT → refine → TTS → extract subtitles → burn → replace audio."""
     from demo_movier import stt as stt_mod, subtitles, video as vid
     from demo_movier import refine as ref
@@ -340,7 +342,7 @@ def run(video, stt, tts, voice, language, max_words, font_size, color, timed,
         tts_srt      = f"{base}.tts.srt"
         subbed       = os.path.join(tmp, "subtitled.mp4")
 
-        total = 4 if tts == "none" else 7
+        total = 4 if tts == "none" else (6 if no_burn_subtitles else 7)
 
         # 1+2. Extract audio + Transcribe (coupled: both skipped when words JSON exists)
         if resume and Path(words_json).exists():
@@ -389,14 +391,17 @@ def run(video, stt, tts, voice, language, max_words, font_size, color, timed,
                 click.echo(f"      saved {refined_srt}")
 
         if tts == "none":
-            if resume and Path(output).exists():
-                click.echo(f"  Skipping subtitle burn — {output} already exists …")
+            if no_burn_subtitles:
+                click.echo(f"\nDone — subtitles saved to {refined_srt}")
             else:
-                click.echo(f"  Burning subtitles …")
-                vid.burn_subtitles(video, refined_srt, output,
-                                   font_size=font_size,
-                                   primary_color=primary, outline_color=outline)
-            click.echo(f"\nDone → {output}")
+                if resume and Path(output).exists():
+                    click.echo(f"  Skipping subtitle burn — {output} already exists …")
+                else:
+                    click.echo(f"  Burning subtitles …")
+                    vid.burn_subtitles(video, refined_srt, output,
+                                       font_size=font_size,
+                                       primary_color=primary, outline_color=outline)
+                click.echo(f"\nDone → {output}")
             return
 
         # 5. TTS (from refined subtitles)
@@ -414,30 +419,38 @@ def run(video, stt, tts, voice, language, max_words, font_size, color, timed,
             if keep_intermediates:
                 click.echo(f"      saved {tts_audio}")
 
-        # 6. Extract subtitles from TTS audio (re-transcribe to get accurate timings)
-        if resume and Path(tts_srt).exists():
-            click.echo(f"[6/{total}] Skipping TTS transcription — {tts_srt} already exists …")
-        else:
-            click.echo(f"[6/{total}] Extracting subtitles from TTS audio …")
-            vid.extract_audio(tts_audio, tts_wav)
-            if stt == "google":
-                tts_words = stt_mod.transcribe_google(tts_wav, language=language)
+        if no_burn_subtitles:
+            # 6. Replace audio directly (no subtitle burn)
+            if resume and Path(output).exists():
+                click.echo(f"[6/{total}] Skipping — {output} already exists …")
             else:
-                tts_words = stt_mod.transcribe_whisper(tts_wav)
-            tts_subs = subtitles.group_into_subtitles(tts_words, max_words=max_words)
-            Path(tts_srt).write_text(subtitles.to_srt(tts_subs), encoding="utf-8")
-            if keep_intermediates:
-                click.echo(f"      saved {tts_srt}")
-
-        # 7. Burn subtitles (from TTS transcription) then replace audio
-        if resume and Path(output).exists():
-            click.echo(f"[7/{total}] Skipping — {output} already exists …")
+                click.echo(f"[6/{total}] Replacing audio …")
+                vid.replace_audio(video, tts_audio, output)
         else:
-            click.echo(f"[7/{total}] Burning subtitles …")
-            vid.burn_subtitles(video, tts_srt, subbed,
-                               font_size=font_size,
-                               primary_color=primary, outline_color=outline)
-            vid.replace_audio(subbed, tts_audio, output)
+            # 6. Extract subtitles from TTS audio (re-transcribe to get accurate timings)
+            if resume and Path(tts_srt).exists():
+                click.echo(f"[6/{total}] Skipping TTS transcription — {tts_srt} already exists …")
+            else:
+                click.echo(f"[6/{total}] Extracting subtitles from TTS audio …")
+                vid.extract_audio(tts_audio, tts_wav)
+                if stt == "google":
+                    tts_words = stt_mod.transcribe_google(tts_wav, language=language)
+                else:
+                    tts_words = stt_mod.transcribe_whisper(tts_wav)
+                tts_subs = subtitles.group_into_subtitles(tts_words, max_words=max_words)
+                Path(tts_srt).write_text(subtitles.to_srt(tts_subs), encoding="utf-8")
+                if keep_intermediates:
+                    click.echo(f"      saved {tts_srt}")
+
+            # 7. Burn subtitles (from TTS transcription) then replace audio
+            if resume and Path(output).exists():
+                click.echo(f"[7/{total}] Skipping — {output} already exists …")
+            else:
+                click.echo(f"[7/{total}] Burning subtitles …")
+                vid.burn_subtitles(video, tts_srt, subbed,
+                                   font_size=font_size,
+                                   primary_color=primary, outline_color=outline)
+                vid.replace_audio(subbed, tts_audio, output)
 
     if not save_intermediates:
         for f in [srt_path, refined_srt, words_json, tts_audio, tts_srt]:
