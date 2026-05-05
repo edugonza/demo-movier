@@ -13,6 +13,7 @@ dependencies = [
     "google-cloud-texttospeech>=2.17.0",
     "google-cloud-storage>=2.0.0",
     "google-auth>=2.29.0",
+    "pyrubberband>=0.4.0",
 ]
 
 [project.optional-dependencies]
