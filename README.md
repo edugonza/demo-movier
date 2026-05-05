@@ -64,7 +64,6 @@ This produces `demo.final.mp4` with hardcoded subtitles and a synthetic voice. T
 ```bash
 uv run movier run demo.mp4 \
   --voice en-US-Chirp3-HD-Aoede \   # newest Google voice
-  --timed \                          # sync TTS to original subtitle timing
   --refine-backend rules \           # use offline rules instead of LLM
   --color yellow \
   --font-size 24 \
@@ -98,12 +97,13 @@ Each step checks whether its output file already exists and skips it if so. The 
 |---|---|---|---|
 | `--stt` | `google` | `google`, `whisper` | Speech-to-text backend |
 | `--tts` | `google` | `google`, `none` | TTS backend; `none` skips voice replacement and only burns subtitles |
-| `--voice` | `en-US-Studio-Q` | any Google voice ID | See [Recommended Google voices](#recommended-google-voices) |
+| `--voice` | `en-US-Chirp3-HD-Charon` | any Google voice ID | See [Recommended Google voices](#recommended-google-voices) |
 | `--language` | `en-US` | BCP-47 tag | Language for STT transcription |
 | `--max-words` | `8` | integer | Max words per subtitle block |
 | `--font-size` | `22` | integer | Subtitle font size in pixels |
 | `--color` | `white` | `white`, `yellow`, `cyan` | Subtitle text colour |
-| `--timed` | off | flag | Synthesise TTS per subtitle to preserve original timing |
+| `--not-timed` | off | flag | Ignore subtitle timestamps; synthesise as one continuous audio file |
+| `--respect-silences` | off | flag | In timed mode, preserve actual silence gaps between subtitles (uses per-chunk prosody rates) |
 | `--rate` | `1.0` | 0.5–2.0 | Speaking rate for TTS |
 | `--refine-backend` | `llm` | `rules`, `llm` | Subtitle refinement: `rules` is offline, `llm` uses Gemini Flash |
 | `--resume` | off | flag | Skip steps whose output files already exist |
@@ -147,9 +147,11 @@ Two backends are available:
 **4. Synthesise voice** — generate TTS audio from the refined SRT:
 
 ```bash
-uv run movier voice demo.refined.srt --voice en-US-Studio-Q
-# with timed mode (each subtitle placed at its original timestamp):
-uv run movier voice demo.refined.srt --timed --video demo.mp4
+uv run movier voice demo.refined.srt --voice en-US-Chirp3-HD-Charon --video demo.mp4
+# ignore timestamps and synthesise as one continuous file:
+uv run movier voice demo.refined.srt --not-timed
+# preserve actual silence gaps between subtitles:
+uv run movier voice demo.refined.srt --video demo.mp4 --respect-silences
 # → demo.refined.tts.mp3
 ```
 
@@ -215,8 +217,9 @@ Google's synchronous TTS API has a **5000-byte input limit**. For longer transcr
 
 ### TTS timing modes
 
-- **full** *(default)* — entire transcript synthesised as one audio file; pacing may differ from the original video
-- **timed** (`--timed`) — each subtitle segment is synthesised separately and placed at its original timestamp; preserves the original pacing layout
+- **timed** *(default)* — each subtitle segment is synthesised and placed at its original timestamp using a two-pass prosody approach; pitch-preserving time-stretching (via `pyrubberband`) corrects any overshoot per chunk
+- **timed + respect-silences** (`--respect-silences`) — same as timed, but actual silence gaps between subtitles are preserved in the SSML; per-chunk prosody rates are derived from the gap-inclusive duration
+- **full** (`--not-timed`) — entire transcript synthesised as one continuous audio file; simpler but pacing may differ from the original video
 
 ## Subtitle customisation
 

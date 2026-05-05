@@ -47,6 +47,11 @@ def _resolve_tts_timed(backend: str):
     return {"google": tts.synthesize_google_timed}[backend]
 
 
+def _resolve_tts_timed_with_silences(backend: str):
+    from demo_movier import tts
+    return {"google": tts.synthesize_google_timed_respect_silences}[backend]
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # CLI
 # ──────────────────────────────────────────────────────────────────────────────
@@ -163,7 +168,7 @@ def refine(srt, backend, model, join_pause, output):
     Typical workflow:
       movier subtitles video.mp4          # → video.srt
       movier refine video.srt             # → video.refined.srt
-      movier voice --timed video.refined.srt --video video.mp4
+      movier voice video.refined.srt --video video.mp4
     """
     from demo_movier import refine as ref
     from demo_movier.subtitles import load_srt, to_srt
@@ -227,19 +232,20 @@ def burn(video, srt, output, font, font_size, color, no_bold, margin_v):
 @click.argument("srt_or_text")
 @click.option("--tts", default="google", type=click.Choice(["google"]),
               show_default=True)
-@click.option("--voice", default="en-US-Studio-Q", show_default=True,
+@click.option("--voice", default="en-US-Chirp3-HD-Charon", show_default=True,
               help="Voice name. See tts.GOOGLE_VOICES for available options.")
-@click.option("--timed", is_flag=True,
-              help="Preserve subtitle timestamps (overlay each clip at its start time). "
-                   "Requires --video to determine total duration.")
-@click.option("--video", default=None, help="Source video (needed for --timed duration).")
+@click.option("--not-timed", is_flag=True,
+              help="Ignore subtitle timestamps")
+@click.option("--video", default=None, help="Source video (needed for timed duration).")
 @click.option("--rate", default=1.0, show_default=True, help="Speaking rate (0.5–2.0).")
 @click.option("-o", "--output", default=None)
-def voice(srt_or_text, tts, voice, timed, video, rate, output):
+@click.option("--respect-silences", is_flag=True)
+def voice(srt_or_text, tts, voice, not_timed, video, rate, output, respect_silences):
     """Synthesise a TTS audio file from an SRT or plain text file."""
     from demo_movier import tts as tts_mod, subtitles, video as vid
 
     output = output or _stem(srt_or_text, ".tts.mp3")
+    timed = not not_timed
 
     if srt_or_text.endswith(".srt"):
         subs = subtitles.load_srt(srt_or_text)
@@ -250,10 +256,13 @@ def voice(srt_or_text, tts, voice, timed, video, rate, output):
 
     if timed and subs:
         if not video:
-            raise click.UsageError("--video is required with --timed")
+            raise click.UsageError("--video is required for timed results")
         duration = vid.video_duration(video)
         click.echo(f"  TTS (timed, {tts.upper()}, {len(subs)} segments) …")
-        _resolve_tts_timed(tts)(subs, duration, output, voice_name=voice)
+        if respect_silences:
+            _resolve_tts_timed_with_silences(tts)(subs, duration, output, voice_name=voice)
+        else:
+            _resolve_tts_timed(tts)(subs, duration, output, voice_name=voice)
     else:
         click.echo(f"  TTS (full, {tts.upper()}) …")
         fn = _resolve_tts_full(tts)
@@ -294,14 +303,14 @@ def replace(video, audio, output, mix, original_volume):
               show_default=True)
 @click.option("--tts", default="google", type=click.Choice(["google", "none"]),
               show_default=True, help="Pass 'none' to skip voice replacement.")
-@click.option("--voice", default="en-US-Studio-Q", show_default=True)
+@click.option("--voice", default="en-US-Chirp3-HD-Charon", show_default=True)
 @click.option("--language", default="en-US", show_default=True)
 @click.option("--max-words", default=8, show_default=True)
 @click.option("--font-size", default=22, show_default=True)
 @click.option("--color", default="white",
               type=click.Choice(["white", "yellow", "cyan"]), show_default=True)
-@click.option("--timed", is_flag=True,
-              help="Synthesise TTS per-subtitle to preserve timing.")
+@click.option("--not-timed", is_flag=True,
+              help="Ignore subtitle timing timing.")
 @click.option("--rate", default=1.0, show_default=True)
 @click.option("--refine-backend", default="llm", show_default=True,
               type=click.Choice(["rules", "llm"]),
@@ -314,12 +323,14 @@ def replace(video, audio, output, mix, original_volume):
               help="Skip burning subtitles into the final video. With --tts=none, only SRT files are produced.")
 @click.option("-o", "--output", default=None,
               help="Final output video path (default: <video>.final.mp4).")
-def run(video, stt, tts, voice, language, max_words, font_size, color, timed,
-        rate, refine_backend, resume, keep_intermediates, no_burn_subtitles, output):
+@click.option("--respect-silences", is_flag=True)
+def run(video, stt, tts, voice, language, max_words, font_size, color, not_timed,
+        rate, refine_backend, resume, keep_intermediates, no_burn_subtitles, output, respect_silences):
     """Full pipeline: transcribe → SRT → refine → TTS → extract subtitles → burn → replace audio."""
     from demo_movier import stt as stt_mod, subtitles, video as vid
     from demo_movier import refine as ref
 
+    timed = not not_timed
     base = _stem(video, "")
     output = output or _stem(video, ".final.mp4")
 
@@ -411,7 +422,10 @@ def run(video, stt, tts, voice, language, max_words, font_size, color, timed,
             click.echo(f"[5/{total}] Synthesising voice ({tts.upper()}) …")
             duration = vid.video_duration(video)
             if timed:
-                _resolve_tts_timed(tts)(refined_subs, duration, tts_audio, voice_name=voice)
+                if respect_silences:
+                    _resolve_tts_timed_with_silences(tts)(refined_subs, duration, tts_audio, voice_name=voice)
+                else:
+                    _resolve_tts_timed(tts)(refined_subs, duration, tts_audio, voice_name=voice)
             else:
                 full_text = " ".join(s.text for s in refined_subs)
                 fn = _resolve_tts_full(tts)
